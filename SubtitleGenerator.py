@@ -1,74 +1,148 @@
 import os
-from pathlib import Path
-import moviepy.editor as mp
+from sys import stderr
+from pydub import AudioSegment          # for audio extraction from video file
 import speech_recognition as sr         # from Google
 from googletrans import Translator      # from Google, version can cause issue: pip install googletrans==3.1.0a0
-import shutil
+import shutil                           # for cleanup
+from joblib import Parallel, delayed    # for parallel execution
+import time                             # performance analysis
 
-def get_parent_dir( path=str ):
-    return Path( path ).parent.absolute()
+# KaiPython needs to be added if not in site-packages
+    # import sys
+    # sys.path.insert(0, r'C:\Users\shenc\Documents\MyScripts\KaiPython')
+from KaiPython.Misc import get_file_barename, default_download_path
 
-def get_file_barename( path=str ):
-    return os.path.splitext( os.path.basename( path ) )[0]
+# Helper function to parallel a class method (this is genius)
+#   credit to Qingkai Kong: http://qingkaikong.blogspot.com/2016/12/python-parallel-method-in-class.html
+def process_chunk_wrapper( arg, **kwarg ):
+    SubtitleGenerator.process_chunk( *arg, **kwarg  )
 
-# subtitleGenerator class
+# SubtitleGenerator class
+#   The class generates subtitle using fixed time interval, which might not be the best idea
 class SubtitleGenerator:
-    def __init__( self, chunk_size=2, verbose=False )->None:
+    def __init__( self, chunk_size=3, verbose=False, parallel=False, num_jobs=-1 )->None:
         # speech recognition obj init
-        self.recognizer     = sr.Recognizer()
-        self.translator     = Translator()
+        self.__recognizer   = sr.Recognizer()
+        self.__translator   = Translator()
+        self.parallel       = parallel
+        self.num_jobs       = num_jobs
+        self.barename       = 'TBD'         # to-be-decided
         self.chunk_size     = chunk_size    # in seconds
-        self.tasklet_time   = 0             # TODO
-        self.stddev         = 1
         self.opt_v          = verbose
     
-    def generate_subtitle(self, src_path=str, out_path=str, in_lang='ja', out_lang='zh-CN')->None:
+    def generate_subtitle(self, src_file_path=str, out_dir=default_download_path(), in_lang=str, out_lang='en')->None:
         # Set the in_lang, out_lang, out_dir
-        self.in_lang = in_lang
+        self.out_dir  = out_dir
+        self.in_lang  = in_lang
         self.out_lang = out_lang
-        self.out_path = out_path
-        self.out_dir = get_parent_dir( out_path )
+        self.barename = get_file_barename(src_file_path)
 
         # Create a directory to store chunked audio files
-        chunk_dir = os.path.join( self.out_dir, 'audio_chunks')
-        if not os.path.exists( chunk_dir ):
-            os.mkdir( chunk_dir )
+        self.chunk_dir = os.path.join( self.out_dir, 'audio_chunks')
+        if not os.path.exists( self.chunk_dir ):
+            os.mkdir( self.chunk_dir )
 
-        # Load the video and extract audio
-        video_clip = mp.VideoFileClip( src_path )
-        audio_clip = video_clip.audio
-
-        # Define chunk size in seconds (adjust as needed)
-        chunk_size = self.chunk_size  # Set to a value that works for your audio file
+        # Extract audio from video
+        self.audio_clip = AudioSegment.from_file( src_file_path )
 
         # Split the audio into chunks and transcribe
-        total_duration = audio_clip.duration
-        num_chunks = int(total_duration / chunk_size) + 1
-        print(f'Number of chunks = {num_chunks}')
+        self.total_duration = len(self.audio_clip) // 1_000             # in seconds
+        num_chunks = int(self.total_duration / self.chunk_size) + 1
+        if self.opt_v: print(f'Number of chunks = {num_chunks}')
 
-        subtitle_lines = []  # Store subtitle lines for the entire video
+        self.subtitle_lines = []  # Store subtitle lines for the entire video
 
-        # Iterate chunks
-        for i in range(num_chunks):
-            start_time = i * chunk_size
-            end_time = min((i + 1) * chunk_size, total_duration)
-            chunk_audio = audio_clip.subclip(start_time, end_time)
+        # Performance Analysis
+        performance_start_time = time.time()    
 
-            # Save the chunked audio as a temporary WAV file
-            temp_audio_file = os.path.join( chunk_dir, f'chunk_{i}.wav' )
-            chunk_audio.write_audiofile(temp_audio_file, codec='pcm_s16le', verbose=False, logger=None)
+        # Parallel | Serial
+        if self.parallel:
+            if self.opt_v:
+                if self.num_jobs == -1:
+                    print("Parallel mode: multi-threading =", os.cpu_count())
+                else:
+                    print("Parallel mode: multi-threading =", self.num_jobs)
+            tasks = [ delayed(process_chunk_wrapper)(tpl) for tpl in zip( [self] * num_chunks, range(num_chunks) ) ]
+            Parallel(n_jobs=self.num_jobs, backend='threading', require="sharedmem")(tasks)
+            # Sort (Parallel jobs does not append in order
+            self.subtitle_lines = sorted( self.subtitle_lines, key=lambda x: x['index'] )
+        else:
+            for idx in range(num_chunks):
+                self.process_chunk(idx=idx)
 
-            # translate
-            translated_transcript = self.translate( audio_data_file=temp_audio_file, idx=i )
+        # Performance Analysis
+        print("--- %s seconds ---" % (time.time() - performance_start_time))
 
-            # Append the chunk's transcript to the subtitle lines
-            subtitle_lines.append({
-                'index': i + 1,
-                'start_time': start_time,
-                'end_time': end_time,
-                'transcript': translated_transcript
-            })
+        # Write .srt subtitle file after translation iteration ends
+        self.__write_to_file(subtitle_lines=self.subtitle_lines)
 
+        # Clean up temporary audio files
+        if self.opt_v: print('Cleaning up tmp dir', self.chunk_dir, '...')
+        shutil.rmtree(self.chunk_dir)
+
+    def process_chunk( self, idx=int )->None:   # had to make this public b/c of the parallel wrapper func
+        start_time  = idx * self.chunk_size
+        end_time    = min((idx + 1) * self.chunk_size, self.total_duration)
+        chunk_audio = self.audio_clip[ start_time * 1_000 : end_time * 1_000 ]  # pydub use unit in milsec
+
+        # Save the chunked audio as a temporary WAV file
+        temp_audio_file = os.path.join( self.chunk_dir, f'chunk_{idx}.wav' )
+        chunk_audio.export(temp_audio_file, format='wav')
+
+        # Translate
+        transcript, translated = self.__translate( audio_data_file=temp_audio_file, idx=idx )
+
+        # Verbose progress tracking
+        if self.opt_v: 
+            print(f"chk_{idx}: [{start_time}=>{end_time}]\n# {transcript}\n# {translated}")
+
+        # Append the chunk's transcript to the subtitle lines
+        self.subtitle_lines.append({
+            'index': idx + 1,
+            'start_time': start_time,
+            'end_time': end_time,
+            'transcript': transcript,
+            'translated': translated,
+        })
+
+    def __translate( self, audio_data_file=str, idx=int )->str:
+        # Perform speech recognition
+        try:
+            # Load the temporary audio file and transcribe it
+            with sr.AudioFile(audio_data_file) as source:
+                audio_data = self.__recognizer.record(source)
+
+            transcript = self.__recognizer.recognize_google(audio_data, language = self.in_lang) #, show_all = True)
+
+            # Translate the transcript using googletrans
+            translated_text = self.__translator.translate(text=transcript, dest=self.out_lang)
+
+            return (transcript, translated_text.text)
+
+        except sr.UnknownValueError:
+            # Might just be silence...
+            if self.opt_v:
+                print("@ Speech Recognition could not understand the audio. might be silence", file=stderr)
+            return ('', '')
+        
+        except sr.RequestError as e:
+            print(f"@ Could not request results from Google Speech Recognition service; {e}", file=stderr)
+            return ('', '')
+
+    def __write_to_file( self, subtitle_lines=list )->None:
+            # expected struct
+            # [
+            #     {
+            #         'index': idx,
+            #         'start_time': start_time,
+            #         'end_time': end_time,
+            #         'transcript': transcript,
+            #         'translated': translated
+            #     }
+            # ]
+
+        # Construct output path
+        out_path = os.path.join( self.out_dir, self.barename + '.srt' )
         # Write the subtitle lines to the output SRT file
         with open(out_path, 'w', encoding='utf-8') as subtitle_file:
             for line in subtitle_lines:
@@ -80,37 +154,8 @@ class SubtitleGenerator:
                                                                 line['end_time'] % 60)
                 subtitle_file.write(f"{line['index']}\n")
                 subtitle_file.write(f"{start_time_str} --> {end_time_str}\n")
-                subtitle_file.write(f"{line['transcript']}\n")
+                subtitle_file.write(f"{line['transcript']}\n{line['translated']}\n")
                 subtitle_file.write("\n")
 
         print(f"Subtitle file saved as '{out_path}'.")
-
-        # Clean up temporary audio files
-        print('- Cleaning up', chunk_dir, '...')
-        shutil.rmtree(chunk_dir)
-
-    def translate( self, audio_data_file=str, idx=int )->str:
-        # Perform speech recognition
-        try:
-            # Load the temporary audio file and transcribe it
-            with sr.AudioFile(audio_data_file) as source:
-                audio_data = self.recognizer.record(source)
-
-            transcript = self.recognizer.recognize_google(audio_data, language = self.in_lang) #, show_all = True)
-            if self.opt_v: print("Transcript: ", transcript)
-
-            # Translate the transcript using googletrans
-            translated_text = self.translator.translate(text=transcript, dest=self.out_lang)
-            translated_transcript = translated_text.text
-
-            if self.opt_v: print(f"{idx}: {transcript}\n=>\t{translated_transcript}")
-
-            return translated_transcript
-
-        except sr.UnknownValueError:
-            print("Speech Recognition could not understand the audio.")
-            return ''
-        
-        except sr.RequestError as e:
-            print(f"Could not request results from Google Speech Recognition service; {e}")
-            return ''
+    
