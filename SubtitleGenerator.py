@@ -9,7 +9,7 @@ import time                             # performance analysis
 
 # KaiPython needs to be added if not in site-packages
     # import sys
-    # sys.path.insert(0, r'C:\Users\shenc\Documents\MyScripts\KaiPython')
+    # sys.path.insert(0, r'path_to_KayPython')
 from KaiPython.Misc import get_file_barename, default_download_path
 
 # Helper function to parallel a class method (this is genius)
