@@ -1,10 +1,12 @@
 import os
 import re
+import m3u8
 import requests
 from urllib.parse import urlparse
 from user_agent import generate_user_agent
-import m3u8
 from joblib import Parallel, delayed
+import subprocess
+import shutil
 import time
 
 from KaiPython.Misc import vanilla_download
@@ -13,7 +15,7 @@ class M3U8Downloader:
     def __init__(self, url=str, referer=str, out_dir=str, verbose=False) -> None:
         self.opt_v          = verbose
         self.out_dir        = out_dir
-        self.tmp_dir        = os.path.join(out_dir, r'm3u8_tmp')
+        self.tmp_dir        = os.path.join(out_dir, str(time.time()).replace('.',''))
         self.playlist_url   = url
         self.host_path      = self.__host_path()
         self.referer        = referer
@@ -29,7 +31,7 @@ class M3U8Downloader:
 
         if r.ok:
             # Parse the master M3U8 playlist
-            if self.opt_v: print(r.text)
+            if self.opt_v: print('='*80, '\n', r.text.replace(r'\n\n', r'\n'), '\n', '='*80, sep='')
             m3u8_content = m3u8.loads(r.text)
             if m3u8_content.is_variant:
                 # Find the highest resolution stream
@@ -60,9 +62,9 @@ class M3U8Downloader:
         rel_path =  re.sub(r'[^\/]+\.m3u8.*$', '', self.playlist_url)
         return rel_path
     
-    def __get_ts(self) -> None:
+    def __get_ts(self) -> list:
         r = requests.get( url=self.playlist_url, headers=self.header )
-        file_urls = []
+        ts_tuples, idx = [], 0    # [(url, path)...]
         if r.ok:
             # Save to tmp dir for reference
             with open(os.path.join(self.tmp_dir, 'playlist.m3u8'), 'wb') as f:
@@ -72,29 +74,72 @@ class M3U8Downloader:
             m3u8_content = m3u8.loads(r.text)
             for playlist in m3u8_content.segments:
                 if not urlparse(playlist.uri).scheme:
-                    file_urls.append( self.host_path + playlist.uri )
+                    ts_tuples.append( ( self.host_path + playlist.uri,
+                                      os.path.join( self.tmp_dir, f"{idx}.ts" ) ) )
                 else:
-                    file_urls.append( playlist.uri )
+                    ts_tuples.append( ( playlist.uri,
+                                     os.path.join( self.tmp_dir, f"{idx}.ts" ) ) )
+                idx += 1
             
-            if self.opt_v: print(f"Number of files to download {len(file_urls)}")
+            if self.opt_v: print(f"Number of files to download {len(ts_tuples)}")
             
-            self.__parallel_download(file_urls=file_urls)
+            self.__parallel_download(ts_tuples=ts_tuples)
         else:
             raise ValueError("Unable to reach playlist url when getting ts files")
         
-    def __parallel_download(self, file_urls=list) -> None:
+        return ts_tuples
+        
+    def __parallel_download(self, ts_tuples=list) -> None:
         # fname = re.search(r'\/([^\/\?]+)(\?[^\/]*)?$', url).group(1) 
         # Performance Analysis
         performance_start_time = time.time() 
 
-        tasks = [delayed(vanilla_download)
-                    (v, self.header, os.path.join( self.tmp_dir, f"{i}.ts" ) ) 
-                 for i, v in enumerate(file_urls)]
-        Parallel(n_jobs=-1, backend='threading', require="sharedmem")(tasks)
+        tasks = [delayed(vanilla_download)(tup[0], self.header, tup[1] ) for tup in ts_tuples]
+        Parallel(n_jobs=4, backend='threading', require="sharedmem")(tasks)
 
         # Performance Analysis
-        print("--- %s seconds ---" % (time.time() - performance_start_time))
+        print("--- Parallel Download    %s seconds ---" % round(time.time() - performance_start_time, 2))
 
-    
-    def download_and_merge(self):
-        self.__get_ts()
+    def __concat_ts(self, ts_paths=list, ts_comb_path=str) -> None:
+        # Performance Analysis
+        performance_start_time = time.time() 
+
+        with open(ts_comb_path, 'wb') as wfd:
+            for f in ts_paths:
+                with open(f, 'rb') as fd:
+                    shutil.copyfileobj(fd, wfd)
+
+        # Performance Analysis
+        print("--- Concat Files         %s seconds ---" % round(time.time() - performance_start_time, 2))
+
+    def __transcode(self, ts_path=os.path, mp4_path=os.path) -> None:
+        # Performance Analysis
+        performance_start_time = time.time() 
+
+        command = f'ffmpeg -i {ts_path} -acodec copy -vcodec copy {mp4_path}'
+        result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        if result.returncode == 0:
+            # Performance Analysis
+            print("--- Transcode            %s seconds ---" % round(time.time() - performance_start_time, 2))
+            if self.opt_v: print("Transcode complete.")
+        else:
+            print("Transcode failed with return code:", result.returncode)
+            print("Standard Error:")
+            print(result.stderr)
+
+    def download_merge_transcode(self) -> None:
+        if not os.path.exists( self.tmp_dir ):
+            os.mkdir( self.tmp_dir )
+        # Get .ts files
+        ts_tuples = self.__get_ts()
+        # Concat .ts files
+        ts_paths     = [tup[1] for tup in ts_tuples]
+        ts_comb_path = os.path.join( self.tmp_dir, 'combined.ts')
+        self.__concat_ts(ts_paths=ts_paths, ts_comb_path=ts_comb_path)
+        # Transcode .ts to .mp4
+        mp4_path = os.path.join( self.out_dir, 'output.mp4' )
+        self.__transcode(ts_comb_path, mp4_path)
+        # Clean up
+        if self.opt_v: print('Cleaning up tmp dir', self.tmp_dir, '...')
+        shutil.rmtree(self.tmp_dir)
