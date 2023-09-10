@@ -47,8 +47,8 @@ class SubtitleGenerator:
 
         # Split the audio into chunks and transcribe
         self.total_duration = len(self.audio_clip) // 1_000             # in seconds
-        num_chunks = int(self.total_duration / self.chunk_size) + 1
-        if self.opt_v: print(f'Number of chunks = {num_chunks}')
+        self.num_chunks = int(self.total_duration / self.chunk_size) + 1
+        if self.opt_v: print(f'Number of chunks = {self.num_chunks}')
 
         self.subtitle_lines = []  # Store subtitle lines for the entire video
 
@@ -62,12 +62,12 @@ class SubtitleGenerator:
                     print("Parallel mode: multi-threading =", os.cpu_count())
                 else:
                     print("Parallel mode: multi-threading =", self.num_jobs)
-            tasks = [ delayed(process_chunk_wrapper)(tpl) for tpl in zip( [self] * num_chunks, range(num_chunks) ) ]
+            tasks = [ delayed(process_chunk_wrapper)(tpl) for tpl in zip( [self] * self.num_chunks, range(self.num_chunks) ) ]
             Parallel(n_jobs=self.num_jobs, backend='threading', require="sharedmem")(tasks)
             # Sort (Parallel jobs does not append in order
             self.subtitle_lines = sorted( self.subtitle_lines, key=lambda x: x['index'] )
         else:
-            for idx in range(num_chunks):
+            for idx in range(self.num_chunks):
                 self.process_chunk(idx=idx)
 
         # Performance Analysis
@@ -93,8 +93,8 @@ class SubtitleGenerator:
         transcript, translated = self.__translate( audio_data_file=temp_audio_file, idx=idx )
 
         # Verbose progress tracking
-        if self.opt_v: 
-            print(f"chk_{idx}: [{start_time}=>{end_time}]\n# {transcript}\n# {translated}")
+        if self.opt_v and transcript != '':
+            print(f"[{idx}/{self.num_chunks}]: [{start_time}s=>{end_time}s]\n# {transcript}\n# {translated}")
 
         # Append the chunk's transcript to the subtitle lines
         self.subtitle_lines.append({
@@ -105,29 +105,33 @@ class SubtitleGenerator:
             'translated': translated,
         })
 
-    def __translate( self, audio_data_file=str, idx=int )->str:
+    def __translate( self, audio_data_file=str, retry=3 )->str:
         # Perform speech recognition
-        try:
-            # Load the temporary audio file and transcribe it
-            with sr.AudioFile(audio_data_file) as source:
-                audio_data = self.__recognizer.record(source)
+        for attempt in range(retry):
+            try:
+                # Load the temporary audio file and transcribe it
+                with sr.AudioFile(audio_data_file) as source:
+                    audio_data = self.__recognizer.record(source)
 
-            transcript = self.__recognizer.recognize_google(audio_data, language = self.in_lang) #, show_all = True)
+                transcript = self.__recognizer.recognize_google(audio_data, language = self.in_lang) #, show_all = True)
 
-            # Translate the transcript using googletrans
-            translated_text = self.__translator.translate(text=transcript, dest=self.out_lang)
+                # Translate the transcript using googletrans
+                translated_text = self.__translator.translate(text=transcript, dest=self.out_lang)
 
-            return (transcript, translated_text.text)
+                return (transcript, translated_text.text)
 
-        except sr.UnknownValueError:
-            # Might just be silence...
-            if self.opt_v:
-                print("@ Speech Recognition could not understand the audio. might be silence", file=stderr)
-            return ('', '')
-        
-        except sr.RequestError as e:
-            print(f"@ Could not request results from Google Speech Recognition service; {e}", file=stderr)
-            return ('', '')
+            except sr.UnknownValueError:
+                # Might just be silence...
+                if self.opt_v:
+                    print("@ Speech Recognition could not understand the audio. might be silence", file=stderr)
+                return ('', '')
+            
+            except sr.RequestError as e:
+                print(f"@ Could not request results from Google Speech Recognition service; {e}", file=stderr)
+                return ('', '')
+            
+            except Exception as e:
+                print(f"Retrying on unexpected exception: {e}", file=stderr)
 
     def __write_to_file( self, subtitle_lines=list )->None:
             # expected struct

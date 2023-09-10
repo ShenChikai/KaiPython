@@ -5,15 +5,17 @@ import requests
 from urllib.parse import urlparse
 from user_agent import generate_user_agent
 from joblib import Parallel, delayed
+import concurrent.futures
 import subprocess
 import shutil
 import time
 
-from KaiPython.Misc import vanilla_download
+from KaiPython.RequestsWrapper import vanilla_download, session_downloads
 
 class M3U8Downloader:
     def __init__(self, url=str, referer=str, out_dir=str, verbose=False) -> None:
         self.opt_v          = verbose
+        self.timer_set      = False
         self.out_dir        = out_dir
         self.tmp_dir        = os.path.join(out_dir, str(time.time()).replace('.',''))
         self.playlist_url   = url
@@ -31,7 +33,9 @@ class M3U8Downloader:
 
         if r.ok:
             # Parse the master M3U8 playlist
-            if self.opt_v: print('='*80, '\n', r.text.replace(r'\n\n', r'\n'), '\n', '='*80, sep='')
+            if self.opt_v: 
+                m3u8_text_to_print = "".join([s for s in r.text.strip().splitlines(True) if s.strip()])
+                print('='*80, '\n', m3u8_text_to_print, '\n', '='*80, sep='')
             m3u8_content = m3u8.loads(r.text)
             if m3u8_content.is_variant:
                 # Find the highest resolution stream
@@ -64,7 +68,7 @@ class M3U8Downloader:
     
     def __get_ts(self) -> list:
         r = requests.get( url=self.playlist_url, headers=self.header )
-        ts_tuples, idx = [], 0    # [(url, path)...]
+        ts_hash_list, idx = [], 0    # [(url, dir, file_name)...]
         if r.ok:
             # Save to tmp dir for reference
             with open(os.path.join(self.tmp_dir, 'playlist.m3u8'), 'wb') as f:
@@ -74,67 +78,89 @@ class M3U8Downloader:
             m3u8_content = m3u8.loads(r.text)
             for playlist in m3u8_content.segments:
                 if not urlparse(playlist.uri).scheme:
-                    ts_tuples.append( ( self.host_path + playlist.uri,
-                                      os.path.join( self.tmp_dir, f"{idx}.ts" ) ) )
+                    ts_hash_list.append( 
+                                        {
+                                            'url':  self.host_path + playlist.uri, 
+                                            'dir':  self.tmp_dir,
+                                            'name': f"{idx}.ts"
+                                        } 
+                                    )
                 else:
-                    ts_tuples.append( ( playlist.uri,
-                                     os.path.join( self.tmp_dir, f"{idx}.ts" ) ) )
+                    ts_hash_list.append(
+                                        {
+                                            'url':  playlist.uri,
+                                            'dir':  self.tmp_dir, 
+                                            'name': f"{idx}.ts"
+                                        } 
+                                    ) 
                 idx += 1
             
-            if self.opt_v: print(f"Number of files to download {len(ts_tuples)}")
+            if self.opt_v: print(f"Number of files to download {len(ts_hash_list)}")
             
-            self.__parallel_download(ts_tuples=ts_tuples)
+            self.__parallel_download(ts_hash_list=ts_hash_list) # This is faster thru testing
+            #self.__parallel_session_download(ts_hash_list=ts_hash_list)
         else:
             raise ValueError("Unable to reach playlist url when getting ts files")
         
-        return ts_tuples
+        return ts_hash_list
         
-    def __parallel_download(self, ts_tuples=list) -> None:
+    def __parallel_session_download(self, ts_hash_list=list, num_jobs=4) -> None:
+        self.timer("Para-session download")
+
+        # split tasklets evenly for jobs
+        task_per_job = len(ts_hash_list) // num_jobs
+        assignments  = [ ( ts_hash_list[i:i+task_per_job] if (i == num_jobs) else ts_hash_list[i:]) for i in range(num_jobs)]
+
+        # Multi-threading
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(session_downloads, assignments[n], self.header) for n in range(num_jobs)]
+            # Wait for all tasks to complete
+            concurrent.futures.wait(futures)
+
+        self.timer("Para-session download")
+
+    # ts_hash_list = [(url, dir, file_name)...]
+    def __parallel_download(self, ts_hash_list=list, num_jobs=4) -> None:
         # fname = re.search(r'\/([^\/\?]+)(\?[^\/]*)?$', url).group(1) 
-        # Performance Analysis
-        performance_start_time = time.time() 
+        self.timer("Para download")
 
-        tasks = [delayed(vanilla_download)(tup[0], self.header, tup[1] ) for tup in ts_tuples]
-        Parallel(n_jobs=4, backend='threading', require="sharedmem")(tasks)
+        tasks = [delayed(vanilla_download)( x['url'], self.header, os.path.join(x['dir'],x['name']) ) for x in ts_hash_list]
+        Parallel(n_jobs=num_jobs, backend='threading', require="sharedmem")(tasks)
 
-        # Performance Analysis
-        print("--- Parallel Download    %s seconds ---" % round(time.time() - performance_start_time, 2))
+        self.timer("Para download")
 
     def __concat_ts(self, ts_paths=list, ts_comb_path=str) -> None:
-        # Performance Analysis
-        performance_start_time = time.time() 
+        self.timer("Concat ts files") 
 
         with open(ts_comb_path, 'wb') as wfd:
             for f in ts_paths:
                 with open(f, 'rb') as fd:
                     shutil.copyfileobj(fd, wfd)
 
-        # Performance Analysis
-        print("--- Concat Files         %s seconds ---" % round(time.time() - performance_start_time, 2))
+        self.timer("Concat ts files") 
 
     def __transcode(self, ts_path=os.path, mp4_path=os.path) -> None:
-        # Performance Analysis
-        performance_start_time = time.time() 
+        self.timer("Transcode ts file") 
 
         command = f'ffmpeg -i {ts_path} -acodec copy -vcodec copy {mp4_path}'
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if result.returncode == 0:
-            # Performance Analysis
-            print("--- Transcode            %s seconds ---" % round(time.time() - performance_start_time, 2))
+            self.timer("Transcode ts file") 
             if self.opt_v: print("Transcode complete.")
         else:
             print("Transcode failed with return code:", result.returncode)
             print("Standard Error:")
             print(result.stderr)
+            exit()
 
     def download_merge_transcode(self) -> None:
         if not os.path.exists( self.tmp_dir ):
             os.mkdir( self.tmp_dir )
         # Get .ts files
-        ts_tuples = self.__get_ts()
+        ts_hash_list = self.__get_ts()
         # Concat .ts files
-        ts_paths     = [tup[1] for tup in ts_tuples]
+        ts_paths     = [os.path.join(x['dir'],x['name']) for x in ts_hash_list]
         ts_comb_path = os.path.join( self.tmp_dir, 'combined.ts')
         self.__concat_ts(ts_paths=ts_paths, ts_comb_path=ts_comb_path)
         # Transcode .ts to .mp4
@@ -143,3 +169,14 @@ class M3U8Downloader:
         # Clean up
         if self.opt_v: print('Cleaning up tmp dir', self.tmp_dir, '...')
         shutil.rmtree(self.tmp_dir)
+
+    def timer(self, task_name=str) -> None:
+        if self.timer_set:
+            run_time = round(time.time() - self.timer_cnt, 2)
+            print(f"--- {task_name: <30} {run_time}seconds ---")
+            self.timer_set  = False
+        else:
+            self.timer_cnt  = time.time()
+            self.timer_set  = True
+            
+        

@@ -1,6 +1,5 @@
 import os
-import re
-import requests
+import time
 from pathlib import Path # Auto Download path lookup
 from googletrans import Translator # Translator for non-english system
 
@@ -20,17 +19,3 @@ def get_parent_dir( path=str ):
 
 def get_file_barename( path=str ):
     return os.path.splitext( os.path.basename( path ) )[0]
-
-def vanilla_download(url=str, header=dict, out_file=os.path or str, retry=3):
-    for attempt in range(retry):
-        r = requests.get(url=url, headers=header)
-        if r.ok:
-            # save to path
-            with open(out_file, 'wb') as f:
-                f.write(r.content)
-            f.close
-            break
-        else:
-            if attempt == retry - 1:
-                raise Exception(f"Failed to download:\n  {url}\n  to {out_file}")
-        r.close
