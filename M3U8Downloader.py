@@ -13,7 +13,7 @@ import time
 from KaiPython.RequestsWrapper import vanilla_download, session_downloads
 
 class M3U8Downloader:
-    def __init__(self, url=str, referer=str, out_dir=str, verbose=False) -> None:
+    def __init__(self, url=str, referer=str, out_dir=str, skip_fail=False, verbose=False) -> None:
         self.opt_v          = verbose
         self.timer_set      = False
         self.out_dir        = out_dir
@@ -23,6 +23,9 @@ class M3U8Downloader:
         self.referer        = referer
         self.header         = {'referer': referer, 'user-agent': generate_user_agent(os=('mac', 'win'))}
         self.__resolve_if_master_playlist()
+
+        # Skip the ones failed to be downloaded
+        self.skip_fail      = skip_fail
 
         if not os.path.exists( self.tmp_dir ):
                 os.mkdir( self.tmp_dir )
@@ -34,8 +37,8 @@ class M3U8Downloader:
         if r.ok:
             # Parse the master M3U8 playlist
             if self.opt_v: 
-                m3u8_text_to_print = "".join([s for s in r.text.strip().splitlines(True) if s.strip()])
-                print('='*80, '\n', m3u8_text_to_print, '\n', '='*80, sep='')
+                m3u8_text_to_print = "".join([s for s in r.text.strip().splitlines(True) if s.strip()][:15])
+                print('='*80, '\n', m3u8_text_to_print, '='*80, sep='')
             m3u8_content = m3u8.loads(r.text)
             if m3u8_content.is_variant:
                 # Find the highest resolution stream
@@ -124,18 +127,29 @@ class M3U8Downloader:
         # fname = re.search(r'\/([^\/\?]+)(\?[^\/]*)?$', url).group(1) 
         self.timer("Para download")
 
-        tasks = [delayed(vanilla_download)( x['url'], self.header, os.path.join(x['dir'],x['name']) ) for x in ts_hash_list]
-        Parallel(n_jobs=num_jobs, backend='threading', require="sharedmem")(tasks)
+        tasks = [ \
+                    delayed(vanilla_download) \
+                    ( url=x['url'], header=self.header, out_path=os.path.join(x['dir'],x['name']), suppress_fail=self.skip_fail ) \
+                    for x in ts_hash_list \
+                ]
+        skip_list = Parallel(n_jobs=num_jobs, backend='threading', require="sharedmem")(tasks)
+        self.skip_set = set( [i for i in skip_list if i is not None] )
+        if self.opt_v and self.skip_fail:
+            print("Download Failures =", len(self.skip_set), type(self.skip_set))
+            for skip in self.skip_set: print(f"  {skip}")
 
         self.timer("Para download")
 
     def __concat_ts(self, ts_paths=list, ts_comb_path=str) -> None:
         self.timer("Concat ts files") 
-
+        
         with open(ts_comb_path, 'wb') as wfd:
             for f in ts_paths:
-                with open(f, 'rb') as fd:
-                    shutil.copyfileobj(fd, wfd)
+                if self.skip_fail and f in self.skip_set:
+                    pass
+                else:
+                    with open(f, 'rb') as fd:
+                        shutil.copyfileobj(fd, wfd)
 
         self.timer("Concat ts files") 
 
