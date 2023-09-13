@@ -17,7 +17,7 @@ class M3U8Downloader:
         self.opt_v          = verbose
         self.timer_set      = False
         self.out_dir        = out_dir
-        self.tmp_dir        = os.path.join(out_dir, str(time.time()).replace('.',''))
+        self.tmp_dir        = os.path.join(out_dir, 'm3u8_dir_'+str(time.time()).replace('.',''))
         self.playlist_url   = url
         self.host_path      = self.__host_path()
         self.referer        = referer
