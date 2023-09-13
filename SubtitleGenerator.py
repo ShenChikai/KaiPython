@@ -38,7 +38,7 @@ class SubtitleGenerator:
         self.barename = get_file_barename(src_file_path)
 
         # Create a directory to store chunked audio files
-        self.chunk_dir = os.path.join( self.out_dir, 'audio_chunks')
+        self.chunk_dir = os.path.join( self.out_dir, 'audio_chunks_'+str(time.time()).replace('.',''))
         if not os.path.exists( self.chunk_dir ):
             os.mkdir( self.chunk_dir )
 
@@ -90,7 +90,7 @@ class SubtitleGenerator:
         chunk_audio.export(temp_audio_file, format='wav')
 
         # Translate
-        transcript, translated = self.__translate( audio_data_file=temp_audio_file, idx=idx )
+        transcript, translated = self.__translate( audio_data_file=temp_audio_file )
 
         # Verbose progress tracking
         if self.opt_v and transcript != '':
@@ -107,7 +107,7 @@ class SubtitleGenerator:
 
     def __translate( self, audio_data_file=str, retry=3 )->str:
         # Perform speech recognition
-        for attempt in range(retry):
+        for _ in range(retry):
             try:
                 # Load the temporary audio file and transcribe it
                 with sr.AudioFile(audio_data_file) as source:
