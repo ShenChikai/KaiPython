@@ -3,23 +3,27 @@ import re
 import requests
 from requests.adapters import HTTPAdapter, Retry
 
-def vanilla_download(url=str, header=dict, out_path=os.path or str, suppress_fail=False, retry=3):
-    for attempt in range(retry):
-        r = requests.get(url=url, headers=header)
-        if r.ok:
-            # save to path
-            with open(out_path, 'wb') as f:
-                f.write(r.content)
-            break
-        else:
-            if attempt == retry - 1:
-                if suppress_fail:
-                    r.close
-                    return out_path
-                else:
-                    raise Exception(f"Failed to download:\n  {url}\n  to {out_path}")
-        r.close
+def vanilla_download(url=str, header=dict, out_path=os.path or str, 
+                     suppress_fail=False, retry=3, timeout=3):
+    while retry != 0:
+        try:
+            r = requests.get(url=url, headers=header, timeout=(1, timeout-1))
+            if r.ok: break
+        except:
+            pass
+
+    if r and r.ok:
+        # save to path
+        with open(out_path, 'wb') as f:
+            f.write(r.content)
         return None
+    else:
+        # suppress this?
+        if suppress_fail:
+            return out_path
+        else:
+            raise Exception("Failed to download", out_path)
+    
 
 # url_hash_list = [{url:_, dir:_, name:_}...]
 def session_downloads(url_hash_list=list, header=dict, retry=3):

@@ -135,7 +135,7 @@ class M3U8Downloader:
         skip_list = Parallel(n_jobs=num_jobs, backend='threading', require="sharedmem")(tasks)
         self.skip_set = set( [i for i in skip_list if i is not None] )
         if self.opt_v and self.skip_fail:
-            print("Download Failures =", len(self.skip_set), type(self.skip_set))
+            print("Download Failures =", len(self.skip_set))
             for skip in self.skip_set: print(f"  {skip}")
 
         self.timer("Para download")
