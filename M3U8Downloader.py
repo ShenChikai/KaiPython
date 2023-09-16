@@ -13,10 +13,11 @@ import time
 from KaiPython.RequestsWrapper import vanilla_download, session_downloads
 
 class M3U8Downloader:
-    def __init__(self, url=str, referer=str, out_dir=str, skip_fail=False, verbose=False) -> None:
+    def __init__(self, url=str, referer=str, out_dir=str, out_name='output', skip_fail=False, verbose=False) -> None:
         self.opt_v          = verbose
         self.timer_set      = False
         self.out_dir        = out_dir
+        self.out_name       = out_name
         self.tmp_dir        = os.path.join(out_dir, 'm3u8_dir_'+str(time.time()).replace('.',''))
         self.playlist_url   = url
         self.host_path      = self.__host_path()
@@ -178,7 +179,7 @@ class M3U8Downloader:
         ts_comb_path = os.path.join( self.tmp_dir, 'combined.ts')
         self.__concat_ts(ts_paths=ts_paths, ts_comb_path=ts_comb_path)
         # Transcode .ts to .mp4
-        mp4_path = os.path.join( self.out_dir, 'output.mp4' )
+        mp4_path = os.path.join( self.out_dir, self.out_name+'.mp4' )
         self.__transcode(ts_comb_path, mp4_path)
         # Clean up
         if self.opt_v: print('Cleaning up tmp dir', self.tmp_dir, '...')

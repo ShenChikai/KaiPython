@@ -6,6 +6,7 @@ from googletrans import Translator      # from Google, version can cause issue: 
 import shutil                           # for cleanup
 from joblib import Parallel, delayed    # for parallel execution
 import time                             # performance analysis
+import subprocess
 
 # KaiPython needs to be added if not in site-packages
     # import sys
@@ -30,12 +31,15 @@ class SubtitleGenerator:
         self.chunk_size     = chunk_size    # in seconds
         self.opt_v          = verbose
     
-    def generate_subtitle(self, src_file_path=str, out_dir=default_download_path(), in_lang=str, out_lang='en')->None:
+    def generate_subtitle(self, src_file_path=str, out_dir=default_download_path(), 
+                          in_lang=str, out_lang='en',
+                          embed=False)->None:
         # Set the in_lang, out_lang, out_dir
         self.out_dir  = out_dir
         self.in_lang  = in_lang
         self.out_lang = out_lang
         self.barename = get_file_barename(src_file_path)
+        self.embed    = embed
 
         # Create a directory to store chunked audio files
         self.chunk_dir = os.path.join( self.out_dir, 'audio_chunks_'+str(time.time()).replace('.',''))
@@ -74,11 +78,30 @@ class SubtitleGenerator:
         print("--- %s seconds ---" % (time.time() - performance_start_time))
 
         # Write .srt subtitle file after translation iteration ends
-        self.__write_to_file(subtitle_lines=self.subtitle_lines)
+        out_path = self.__write_to_file(subtitle_lines=self.subtitle_lines)
 
         # Clean up temporary audio files
         if self.opt_v: print('Cleaning up tmp dir', self.chunk_dir, '...')
         shutil.rmtree(self.chunk_dir)
+
+        # Embed to video
+        if self.embed:
+            self.embed_to_video(src_file_path=src_file_path, out_path=out_path)
+
+    def embed_to_video( self, src_file_path=str or os.path, out_path=str or os.path ) -> None:
+        orig_name = os.path.basename(src_file_path)
+        new_name  = '.'.join(str(orig_name).split('.').insert(-1,'subtitled'))
+        new_path  = os.path.join(self.out_dir, new_name)
+        command = f'ffmpeg -i {src_file_path} -vf subtitles={out_path} {new_path}'
+        result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+        if result.returncode == 0:
+            if self.opt_v: print("Subtitle embedding complete.")
+        else:
+            print("Subtitle embedding failed with return code:", result.returncode)
+            print("Standard Error:")
+            print(result.stderr)
+            exit()
 
     def process_chunk( self, idx=int )->None:   # had to make this public b/c of the parallel wrapper func
         start_time  = idx * self.chunk_size
@@ -162,4 +185,5 @@ class SubtitleGenerator:
                 subtitle_file.write("\n")
 
         print(f"Subtitle file saved as '{out_path}'.")
+        return out_path
     
