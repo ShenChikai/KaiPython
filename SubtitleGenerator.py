@@ -92,7 +92,7 @@ class SubtitleGenerator:
         orig_name = os.path.basename(src_file_path)
         new_name  = '.'.join(str(orig_name).split('.').insert(-1,'subtitled'))
         new_path  = os.path.join(self.out_dir, new_name)
-        command = f'ffmpeg -i {src_file_path} -vf subtitles={out_path} {new_path}'
+        command = f'ffmpeg -i {src_file_path} -vf \"subtitles={out_path}\" {new_path}'
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if result.returncode == 0:
