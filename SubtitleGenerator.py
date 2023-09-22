@@ -31,7 +31,7 @@ class SubtitleGenerator:
         self.chunk_size     = chunk_size    # in seconds
         self.opt_v          = verbose
     
-    def generate_subtitle(self, src_file_path=str, out_dir=default_download_path(), 
+    def generate_subtitle(self, src_file_path=str or os.path, out_dir=default_download_path(), 
                           in_lang=str, out_lang='en',
                           embed=False)->None:
         # Set the in_lang, out_lang, out_dir
@@ -90,7 +90,9 @@ class SubtitleGenerator:
 
     def embed_to_video( self, src_file_path=str or os.path, out_path=str or os.path ) -> None:
         orig_name = os.path.basename(src_file_path)
-        new_name  = '.'.join(str(orig_name).split('.').insert(-1,'subtitled'))
+        split_name_list = str(orig_name).split('.')
+        split_name_list.insert(-1,'subtitled')
+        new_name  = '.'.join(split_name_list)
         new_path  = os.path.join(self.out_dir, new_name)
         command = f'ffmpeg -i {src_file_path} -vf \"subtitles={out_path}\" {new_path}'
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
