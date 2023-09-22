@@ -21,6 +21,7 @@ class M3U8Downloader:
         self.tmp_dir        = os.path.join(out_dir, 'm3u8_dir_'+str(time.time()).replace('.',''))
         self.playlist_url   = url
         self.host_path      = self.__host_path()
+        self.middle_path    = ''
         self.referer        = referer
         self.header         = {'referer': referer, 'user-agent': generate_user_agent(os=('mac', 'win'))}
         self.__resolve_if_master_playlist()
@@ -39,9 +40,10 @@ class M3U8Downloader:
             # Parse the master M3U8 playlist
             if self.opt_v: 
                 m3u8_text_to_print = "".join([s for s in r.text.strip().splitlines(True) if s.strip()][:15])
-                print('='*80, '\n', m3u8_text_to_print, '='*80, sep='')
+                print('='*80, '\n', m3u8_text_to_print, '\n', '='*80, sep='')
             m3u8_content = m3u8.loads(r.text)
             if m3u8_content.is_variant:
+                if self.opt_v: print("Master m3u8 detected")
                 # Find the highest resolution stream
                 max_reso_url = None
                 max_width = 0
@@ -55,6 +57,11 @@ class M3U8Downloader:
                         self.playlist_url = self.host_path + max_reso_url
                     else:
                         self.playlist_url = max_reso_url
+
+                    # check for middle path (relative path of the m3u8 playlist)
+                    if '/' in max_reso_url:
+                        middle_path_comps = max_reso_url.split('/')
+                        self.middle_path  = '/'.join(middle_path_comps[:-1]) + '/'
                 else:
                     raise ValueError(f"Unable to parse max resolution, m3u8 content:\nr.text")
         else:
@@ -78,13 +85,16 @@ class M3U8Downloader:
             with open(os.path.join(self.tmp_dir, 'playlist.m3u8'), 'wb') as f:
                 f.write(r.content)
             f.close
+            # URL dir to ts files
+            ts_dir_url = self.host_path + self.middle_path
             # Iterate the m3u8 playlist to get the files
             m3u8_content = m3u8.loads(r.text)
             for playlist in m3u8_content.segments:
                 if not urlparse(playlist.uri).scheme:
+                    # no http in front
                     ts_hash_list.append( 
                                         {
-                                            'url':  self.host_path + playlist.uri, 
+                                            'url':  ts_dir_url + playlist.uri, 
                                             'dir':  self.tmp_dir,
                                             'name': f"{idx}.ts"
                                         } 
@@ -172,6 +182,10 @@ class M3U8Downloader:
     def download_merge_transcode(self) -> None:
         if not os.path.exists( self.tmp_dir ):
             os.mkdir( self.tmp_dir )
+
+        if self.opt_v: 
+            print("Host base URL:", self.host_path)
+            print("Host mddl URL:", self.middle_path)
         # Get .ts files
         ts_hash_list = self.__get_ts()
         # Concat .ts files
