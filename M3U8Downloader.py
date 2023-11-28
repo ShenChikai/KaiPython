@@ -5,15 +5,16 @@ import requests
 from urllib.parse import urlparse
 from user_agent import generate_user_agent
 from joblib import Parallel, delayed
+from tqdm.contrib.concurrent import thread_map
 import concurrent.futures
 import subprocess
 import shutil
 import time
 
-from KaiPython.RequestsWrapper import vanilla_download, session_downloads
+from KaiPython.RequestsWrapper import vanilla_download, vanilla_download_with_dict, session_downloads
 
 class M3U8Downloader:
-    def __init__(self, url=str, referer=str, out_dir=str, out_name='output', skip_fail=False, verbose=False) -> None:
+    def __init__(self, url=str, referer=str, out_dir=str, out_name='output', skip_fail=False, num_downloaders=4, verbose=False) -> None:
         self.opt_v          = verbose
         self.timer_set      = False
         self.out_dir        = out_dir
@@ -24,6 +25,7 @@ class M3U8Downloader:
         self.middle_path    = ''
         self.referer        = referer
         self.header         = {'referer': referer, 'user-agent': generate_user_agent(os=('mac', 'win'))}
+        self.num_jobs       = num_downloaders
         self.__resolve_if_master_playlist()
 
         # Skip the ones failed to be downloaded
@@ -111,7 +113,7 @@ class M3U8Downloader:
             
             if self.opt_v: print(f"Number of files to download {len(ts_hash_list)}")
             
-            self.__parallel_download(ts_hash_list=ts_hash_list) # This is faster thru testing
+            self.__parallel_download_with_progress_bar(ts_hash_list=ts_hash_list) # This is faster thru testing
             #self.__parallel_session_download(ts_hash_list=ts_hash_list)
         else:
             raise ValueError("Unable to reach playlist url when getting ts files")
@@ -134,16 +136,36 @@ class M3U8Downloader:
         self.timer("Para-session download")
 
     # ts_hash_list = [(url, dir, file_name)...]
-    def __parallel_download(self, ts_hash_list=list, num_jobs=4) -> None:
+    def __parallel_download(self, ts_hash_list=list) -> None:
+        '''With Joblib'''
         # fname = re.search(r'\/([^\/\?]+)(\?[^\/]*)?$', url).group(1) 
         self.timer("Para download")
+        print(f"Number of downloaders: {self.num_jobs}")
 
         tasks = [ \
                     delayed(vanilla_download) \
                     ( url=x['url'], header=self.header, out_path=os.path.join(x['dir'],x['name']), suppress_fail=self.skip_fail ) \
                     for x in ts_hash_list \
                 ]
-        skip_list = Parallel(n_jobs=num_jobs, backend='threading', require="sharedmem")(tasks)
+        
+        skip_list = Parallel(n_jobs=self.num_jobs, backend='threading', require="sharedmem")(tasks)
+        self.skip_set = set( [i for i in skip_list if i is not None] )
+        if self.opt_v and self.skip_fail:
+            print("Download Failures =", len(self.skip_set))
+            for skip in self.skip_set: print(f"  {skip}")
+
+        self.timer("Para download")
+
+    # ts_hash_list = [(url, dir, file_name)...]
+    def __parallel_download_with_progress_bar(self, ts_hash_list=list) -> None:
+        '''With tqdm thread_map'''
+        # fname = re.search(r'\/([^\/\?]+)(\?[^\/]*)?$', url).group(1) 
+        self.timer("Para download")
+        print(f"Number of downloaders: {self.num_jobs}")
+
+        kargs_list = [ { 'url':x['url'], 'header':self.header, 'out_path':os.path.join(x['dir'],x['name']), 'suppress_fail':self.skip_fail } for x in ts_hash_list ]
+        skip_list = thread_map(vanilla_download_with_dict, kargs_list)
+        
         self.skip_set = set( [i for i in skip_list if i is not None] )
         if self.opt_v and self.skip_fail:
             print("Download Failures =", len(self.skip_set))
