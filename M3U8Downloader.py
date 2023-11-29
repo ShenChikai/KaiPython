@@ -27,6 +27,9 @@ class M3U8Downloader:
         self.header         = {'referer': referer, 'user-agent': generate_user_agent(os=('mac', 'win'))}
         self.num_jobs       = num_downloaders
         self.progress_bar   = progress_bar
+        self.num_tasks      = None
+        self.num_tasks_left = None
+        self.report_freq    = 0.05         # report frequency = every 5%
         self.__resolve_if_master_playlist()
 
         # Skip the ones failed to be downloaded
@@ -112,12 +115,12 @@ class M3U8Downloader:
                                     ) 
                 idx += 1
             
-            if self.opt_v: print(f"Number of files to download {len(ts_hash_list)}")
+            if self.opt_v: print(f"Num files to download: {len(ts_hash_list)}")
             
             if self.progress_bar:
                 self.__parallel_download_with_progress_bar(ts_hash_list=ts_hash_list)
             else:
-                self.__parallel_download(ts_hash_list=ts_hash_list)
+                self.__parallel_download_with_joblib(ts_hash_list=ts_hash_list)
             # self.__parallel_session_download(ts_hash_list=ts_hash_list)    # this is slow, not sure why
         else:
             raise ValueError("Unable to reach playlist url when getting ts files")
@@ -140,25 +143,39 @@ class M3U8Downloader:
         self.timer("Para-session download")
 
     # ts_hash_list = [(url, dir, file_name)...]
-    def __parallel_download(self, ts_hash_list=list) -> None:
+    def __parallel_download_with_joblib(self, ts_hash_list=list) -> None:
         '''With Joblib'''
         # fname = re.search(r'\/([^\/\?]+)(\?[^\/]*)?$', url).group(1) 
         self.timer("Para download")
-        print(f"Number of downloaders: {self.num_jobs}")
+        print(f"Num of downloaders: {self.num_jobs}")
 
         tasks = [ \
-                    delayed(vanilla_download) \
+                    delayed(self.__vanilla_download_with_progress) \
                     ( url=x['url'], header=self.header, out_path=os.path.join(x['dir'],x['name']), suppress_fail=self.skip_fail ) \
                     for x in ts_hash_list \
                 ]
-        
+        self.num_tasks = len(tasks)
+        self.num_tasks_left = len(tasks)
+        print("Progress: " + "=" * int(1/self.report_freq + 2) + ">")
+        print("          ", end="")
+
         skip_list = Parallel(n_jobs=self.num_jobs, backend='threading', require="sharedmem")(tasks)
+        print("")
+
         self.skip_set = set( [i for i in skip_list if i is not None] )
         if self.opt_v and self.skip_fail:
             print("Download Failures =", len(self.skip_set))
             for skip in self.skip_set: print(f"  {skip}")
 
         self.timer("Para download")
+
+    # Helper_method to provide progress bar like functionality (not refreshing terminal)
+    def __vanilla_download_with_progress(self, url=str, header=dict, out_path=os.path or str, 
+                     suppress_fail=False, retry=3, timeout=3):
+        vanilla_download(url=url, header=header, out_path=out_path, suppress_fail=suppress_fail)
+        self.num_tasks_left -= 1
+        if (self.num_tasks - self.num_tasks_left) % int(self.num_tasks * self.report_freq) == 0:   # report every 10%
+            print("=", end="")
 
     # ts_hash_list = [(url, dir, file_name)...]
     def __parallel_download_with_progress_bar(self, ts_hash_list=list) -> None:
@@ -194,6 +211,14 @@ class M3U8Downloader:
         self.timer("Transcode ts file") 
 
         command = f'ffmpeg -i {ts_path} -acodec copy -vcodec copy {mp4_path}'
+
+        # check if output file name exist
+        if os.path.exists(mp4_path):
+            print("WARN! Output mp4 file name already exists, consider running ffmpeg by hand:")
+            print(command)
+            print(f"Clean up {self.tmp_dir} when done.\nExiting...")
+            exit()
+
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
         if result.returncode == 0:
