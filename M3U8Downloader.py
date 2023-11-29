@@ -14,7 +14,7 @@ import time
 from KaiPython.RequestsWrapper import vanilla_download, vanilla_download_with_dict, session_downloads
 
 class M3U8Downloader:
-    def __init__(self, url=str, referer=str, out_dir=str, out_name='output', skip_fail=False, num_downloaders=4, verbose=False) -> None:
+    def __init__(self, url=str, referer=str, out_dir=str, out_name='output', skip_fail=False, num_downloaders=4, progress_bar=False, verbose=False) -> None:
         self.opt_v          = verbose
         self.timer_set      = False
         self.out_dir        = out_dir
@@ -26,6 +26,7 @@ class M3U8Downloader:
         self.referer        = referer
         self.header         = {'referer': referer, 'user-agent': generate_user_agent(os=('mac', 'win'))}
         self.num_jobs       = num_downloaders
+        self.progress_bar   = progress_bar
         self.__resolve_if_master_playlist()
 
         # Skip the ones failed to be downloaded
@@ -113,8 +114,11 @@ class M3U8Downloader:
             
             if self.opt_v: print(f"Number of files to download {len(ts_hash_list)}")
             
-            self.__parallel_download_with_progress_bar(ts_hash_list=ts_hash_list) # This is faster thru testing
-            #self.__parallel_session_download(ts_hash_list=ts_hash_list)
+            if self.progress_bar:
+                self.__parallel_download_with_progress_bar(ts_hash_list=ts_hash_list)
+            else:
+                self.__parallel_download(ts_hash_list=ts_hash_list)
+            # self.__parallel_session_download(ts_hash_list=ts_hash_list)    # this is slow, not sure why
         else:
             raise ValueError("Unable to reach playlist url when getting ts files")
         
