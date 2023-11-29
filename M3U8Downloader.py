@@ -163,19 +163,26 @@ class M3U8Downloader:
         print("")
 
         self.skip_set = set( [i for i in skip_list if i is not None] )
-        if self.opt_v and self.skip_fail:
-            print("Download Failures =", len(self.skip_set))
+
+        if self.opt_v or self.skip_fail:
             for skip in self.skip_set: print(f"  {skip}")
+            print("Download Failures =", len(self.skip_set))
+
+            # check skip tolerance 5% hardcoded
+            if len(self.skip_set) > self.num_tasks * 0.05:
+                print("Exceed download failure tolerance 5%\nExiting...")
+                exit()
 
         self.timer("Para download")
 
     # Helper_method to provide progress bar like functionality (not refreshing terminal)
     def __vanilla_download_with_progress(self, url=str, header=dict, out_path=os.path or str, 
                      suppress_fail=False, retry=3, timeout=3):
-        vanilla_download(url=url, header=header, out_path=out_path, suppress_fail=suppress_fail)
+        rc = vanilla_download(url=url, header=header, out_path=out_path, suppress_fail=suppress_fail)
         self.num_tasks_left -= 1
         if (self.num_tasks - self.num_tasks_left) % int(self.num_tasks * self.report_freq) == 0:   # report every 10%
             print("=", end="")
+        return rc
 
     # ts_hash_list = [(url, dir, file_name)...]
     def __parallel_download_with_progress_bar(self, ts_hash_list=list) -> None:
@@ -188,7 +195,7 @@ class M3U8Downloader:
         skip_list = thread_map(vanilla_download_with_dict, kargs_list)
         
         self.skip_set = set( [i for i in skip_list if i is not None] )
-        if self.opt_v and self.skip_fail:
+        if self.opt_v or self.skip_fail:
             print("Download Failures =", len(self.skip_set))
             for skip in self.skip_set: print(f"  {skip}")
 
