@@ -1,5 +1,6 @@
 import os
 import re
+from sys import exit
 import m3u8
 import requests
 from urllib.parse import urlparse
@@ -24,7 +25,7 @@ class M3U8Downloader:
         self.host_path      = self.__host_path()
         self.middle_path    = ''
         self.referer        = referer
-        self.header         = {'referer': referer, 'user-agent': generate_user_agent(os=('mac', 'win'))}
+        self.header         = {'referer': referer, 'user-agent': generate_user_agent(os=('mac', 'win'),)}
         self.num_jobs       = num_downloaders
         self.progress_bar   = progress_bar
         self.num_tasks      = None
@@ -223,7 +224,7 @@ class M3U8Downloader:
         if os.path.exists(mp4_path):
             print("WARN! Output mp4 file name already exists, consider running ffmpeg by hand:")
             print(command)
-            print(f"Clean up {self.tmp_dir} when done.\nExiting...")
+            print(f"When done, clean up {self.tmp_dir}.\nExiting...")
             exit()
 
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
